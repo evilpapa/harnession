@@ -1,0 +1,1 @@
+{"main-window":{"identifier":"main-window","description":"Local Harnession workspace; no shell, network or unrestricted file plugins.","local":true,"windows":["main"],"permissions":["core:default"]}}

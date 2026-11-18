@@ -1,0 +1,12 @@
+__pycache__/
+.venv/
+*.egg-info/
+node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/
+build/
+.artifacts/
+.omx/
+.claude/last-session-id
+run.sh

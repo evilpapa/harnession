@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Harnession",
+  "version": "0.1.0",
+  "identifier": "local.harnession.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "Harnession",
+      "width": 1440,
+      "height": 960,
+      "minWidth": 720,
+      "minHeight": 560,
+      "preventOverflow": true,
+      "backgroundColor": "#080d14"
+    }],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb"],
+    "category": "DeveloperTool",
+    "shortDescription": "Local-first Agent session workspace",
+    "longDescription": "Browse local Agent history by project, read conversations and images, and work in native PTY terminals.",
+    "externalBin": ["binaries/harnession-gateway"]
+  }
+}

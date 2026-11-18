@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harnession"
+version = "0.1.0"
+description = "Local-first AI agent session index"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+harnession = "harnession.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["harnession*"]
