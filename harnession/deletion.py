@@ -1,11 +1,43 @@
 """Session command recipes and guarded removal of one indexed file."""
 
+from contextlib import closing
 from pathlib import Path
 import shlex
 import shutil
+import sqlite3
 import stat
 import subprocess
 from uuid import UUID
+
+
+def session_source_state(agent, native_id, source):
+    """Check the indexed file or exact Hermes row without changing the source."""
+    filename = source or ''
+    if agent == 'hermes':
+        suffix = '#' + native_id if native_id else ''
+        if not suffix or not filename.endswith(suffix):
+            return 'unavailable'
+        filename = filename[:-len(suffix)]
+    path = Path(filename)
+    if not path.is_absolute():
+        return 'unavailable'
+    try:
+        entry = path.lstat()
+    except FileNotFoundError:
+        return 'missing'
+    except (OSError, ValueError):
+        return 'unavailable'
+    try:
+        file_stat = path.stat() if stat.S_ISLNK(entry.st_mode) else entry
+        if not stat.S_ISREG(file_stat.st_mode):
+            return 'unavailable'
+        if agent == 'hermes':
+            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
+                if db.execute('SELECT 1 FROM sessions WHERE id=?', (native_id,)).fetchone() is None:
+                    return 'missing'
+    except (OSError, sqlite3.Error, ValueError):
+        return 'unavailable'
+    return 'present'
 
 
 def _safe_file_target(path):
@@ -20,7 +52,7 @@ def _rm():
 def direct_target(agent, native_id, source, root):
     if agent == 'hermes':
         raise ValueError('Hermes 原生命令可能同时清理关联会话和文件，请复制命令后在终端操作。')
-    path, _, reason = _session_source(agent, native_id, source, root)
+    path, _, reason = session_source(agent, native_id, source, root)
     if reason:
         raise ValueError(reason)
     if path != Path(source) or not _safe_file_target(path):
@@ -60,7 +92,7 @@ def deletion_recipe(agent, native_id, source, root):
     result = dict(command=None, session_id=str(native_id or ''), target=source,
                   detail='', reason=None, native_command=None, file_command=None,
                   method=None, native_reason=None)
-    path, root, reason = _session_source(agent, native_id, source, root)
+    path, root, reason = session_source(agent, native_id, source, root)
     if reason:
         result['reason'] = reason
         return result
@@ -94,7 +126,7 @@ def deletion_recipe(agent, native_id, source, root):
 
 def resume_recipe(agent, native_id, source, root, cwd=None):
     result = dict(command=None, session_id=str(native_id or ''), target=source, detail='', reason=None)
-    path, root, reason = _session_source(agent, native_id, source, root)
+    path, root, reason = session_source(agent, native_id, source, root)
     if reason:
         result['reason'] = reason
         return result
@@ -138,7 +170,7 @@ def _agent_home(path, storage_name):
     return next((parent.parent for parent in path.parents if parent.name == storage_name), None)
 
 
-def _session_source(agent, native_id, source, root):
+def session_source(agent, native_id, source, root):
     if agent not in ('codex', 'claude', 'pi', 'hermes'):
         return None, None, '此 Agent 尚未支持会话命令'
     if not isinstance(native_id, str) or not native_id.strip() or any(ord(c) < 32 for c in native_id):

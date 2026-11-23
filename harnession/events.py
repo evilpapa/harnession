@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-PARSER_VERSION = 4
-CLAUDE_PARSER_VERSION = 5
+PARSER_VERSION = 5
+CLAUDE_PARSER_VERSION = 6
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_TYPES = {'image/png', 'image/jpeg', 'image/webp', 'image/gif'}
 

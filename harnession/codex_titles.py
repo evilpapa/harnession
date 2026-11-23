@@ -11,10 +11,19 @@ def _text(value):
     return value.strip().replace('\r', ' ').replace('\n', ' ') if isinstance(value, str) else ''
 
 
-def load_codex_titles(root):
+def codex_home(root):
     root = Path(root).expanduser().resolve()
-    home = next((path.parent for path in (root, *root.parents)
+    return next((path.parent for path in (root, *root.parents)
                  if path.name in ('sessions', 'archived_sessions')), root)
+
+
+def codex_state_path(home):
+    candidates = [path for path in home.glob('state_*.sqlite') if path.stem[6:].isdigit()]
+    return max(candidates, key=lambda path: int(path.stem[6:]), default=None)
+
+
+def load_codex_titles(root):
+    home = codex_home(root)
     indexed = {}
     try:
         with (home / 'session_index.jsonl').open(encoding='utf8') as stream:
@@ -30,8 +39,7 @@ def load_codex_titles(root):
         pass
     states = {}
     try:
-        candidates = [path for path in home.glob('state_*.sqlite') if path.stem[6:].isdigit()]
-        state = max(candidates, key=lambda path: int(path.stem[6:]), default=None)
+        state = codex_state_path(home)
         if state:
             db = sqlite3.connect(state.resolve().as_uri() + '?mode=ro', uri=True, timeout=1)
             try:

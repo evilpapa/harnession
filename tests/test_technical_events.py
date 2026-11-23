@@ -31,6 +31,69 @@ class TechnicalEventsTests(unittest.TestCase):
         session = self.gateway.list_sessions(agent=agent)['items'][0]
         return session, self.gateway.read_events(session['id'])['items']
 
+    def test_codex_turn_status_deduplicates_native_pairs_and_is_searchable(self):
+        abort = '<turn_aborted>\nSTATUS_NEEDLE\n</turn_aborted>'
+
+        def message(text, role='user'):
+            return dict(type='response_item', payload=dict(
+                type='message', role=role, content=[dict(type='input_text', text=text)]))
+
+        self.write('codex', [
+            dict(type='session_meta', payload=dict(id='codex-status')),
+            message(abort, 'developer'),
+            dict(type='event_msg', payload=dict(type='turn_aborted', reason='interrupted')),
+            message('第一个真实问题'),
+            message('<turn_cancelled>stopped</turn_cancelled>'),
+            dict(type='event_msg', payload=dict(type='turn_failed', message='failure details')),
+            message('<turn_aborted>another turn</turn_aborted>'),
+        ])
+        session, events = self.read('codex')
+        self.assertEqual([event['kind'] for event in events],
+                         ['turn_status', 'message', 'turn_status', 'turn_status', 'turn_status'])
+        self.assertEqual([event['metadata']['turn_status'] for event in events if event['kind'] == 'turn_status'],
+                         ['interrupted', 'cancelled', 'failed', 'interrupted'])
+        self.assertEqual(events[0]['text'], abort)
+        self.assertIn('failure details', events[3]['text'])
+        self.assertEqual((session['title'], session['excerpt']), ('第一个真实问题', '第一个真实问题'))
+        self.assertEqual(self.gateway.read_events(session['id'], query='STATUS_NEEDLE')['items'][0], events[0])
+
+    def test_claude_turn_status_upgrade_keeps_question_and_literal_examples(self):
+        marker = '[Request interrupted by user for tool use]'
+        example = '```xml\n<turn_aborted>示例</turn_aborted>\n```'
+        self.write('claude', [
+            dict(type='user', uuid='interrupt', sessionId='claude-status', message=dict(content=marker)),
+            dict(type='user', uuid='question', sessionId='claude-status', message=dict(content=[
+                dict(type='text', text='请解释这个例子'), dict(type='text', text=example),
+                dict(type='text', text='[Request interrupted by user]'),
+            ])),
+        ])
+        session, events = self.read('claude')
+        self.assertEqual([event['kind'] for event in events], ['turn_status', 'message', 'turn_status'])
+        self.assertEqual(session['excerpt'], '请解释这个例子\n' + example)
+        key = self.gateway.session(session['id'])['key']
+        self.gateway.db.execute('UPDATE sessions SET title=? WHERE key=?', (marker, key))
+        self.gateway.db.execute('UPDATE event_state SET parser_version=5 WHERE session_key=?', (key,))
+        self.gateway.db.commit()
+        reopened = Gateway(self.root / 'index.sqlite3')
+        self.addCleanup(reopened.close)
+        self.assertEqual(reopened.get_session(session['id'])['title'], '请解释这个例子 ' + example.replace('\n', ' '))
+        self.assertEqual(reopened.read_events(session['id'])['items'], events)
+
+    def test_pi_stop_reason_adds_status_after_any_partial_reply(self):
+        self.write('pi', [
+            dict(type='session', id='pi-status', version=3),
+            dict(type='message', id='u', message=dict(role='user', content='提问')),
+            dict(type='message', id='a', message=dict(role='assistant', content='部分回答',
+                                                     stopReason='aborted', errorMessage='停止原因')),
+            dict(type='message', id='b', message=dict(role='assistant', content=[], stopReason='error')),
+        ])
+        session, events = self.read('pi')
+        self.assertEqual([event['kind'] for event in events], ['message', 'message', 'turn_status', 'turn_status'])
+        self.assertEqual([event['text'] for event in events], ['提问', '部分回答', '停止原因', 'error'])
+        self.assertEqual([event['metadata']['turn_status'] for event in events[2:]], ['interrupted', 'failed'])
+        self.assertEqual(len({event['id'] for event in events}), 4)
+        self.assertEqual(session['excerpt'], '提问')
+
     def claude(self):
         return [
             dict(type='system', uuid='s', sessionId='claude-1', message=dict(content='SYSTEM_NEEDLE')),

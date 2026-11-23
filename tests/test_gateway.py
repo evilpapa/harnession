@@ -155,8 +155,8 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.gateway.bootstrap()['total'], 1)
         self.assertIn('error', response(self.gateway, dict(method='delete_session')))
 
-    def request_delete(self, session, gateway=None):
-        return response(gateway or self.gateway, dict(method='delete_session', params={
+    def request_delete(self, session, gateway=None, *, method='delete_session'):
+        return response(gateway or self.gateway, dict(method=method, params={
             'session_id': session['id'], 'indexed_at': session['indexed_at'],
         }))
 
@@ -214,6 +214,88 @@ class GatewayTests(unittest.TestCase):
         self.assertIn('文件已更新', result['error']['message'])
         self.assertEqual(desktop.get_session(session['id']), detail)
         self.assertIn('source changed', self.source.read_text())
+
+    def test_delete_index_for_missing_file_cleans_snapshot_without_touching_sources(self):
+        self.write(self.conversation('indexed only', image=True))
+        other = self.source.with_name('other.jsonl')
+        self.write(self.conversation('keep this'), other)
+        before = other.read_bytes()
+        self.scan()
+        session = self.gateway.list_sessions(query='indexed only')['items'][0]
+        key = self.gateway.session(session['id'])['key']
+        self.gateway.db.execute('INSERT INTO overrides VALUES (?,?)', (key, 'manual'))
+        self.gateway.db.commit()
+        moved = self.source.rename(self.source.with_suffix('.saved'))
+        desktop = Gateway(self.root / 'index.sqlite3', allow_delete=True)
+        self.addCleanup(desktop.close)
+        detail = desktop.get_session(session['id'])
+        self.assertTrue(detail['source_missing'])
+        self.assertFalse(detail['source_available'])
+        self.assertIsNone(detail['deletion']['command'])
+        self.assertEqual(len(desktop.read_events(session['id'])['items']), 2)
+        self.assertIn('error', self.request_delete(session, method='delete_session_index'))
+        self.assertIn('索引已更新', self.request_delete(dict(session, indexed_at='stale'), desktop,
+                                                   method='delete_session_index')['error']['message'])
+
+        with patch('harnession.gateway.remove_session_file') as remove_source:
+            result = self.request_delete(session, desktop, method='delete_session_index')
+            remove_source.assert_not_called()
+        self.assertEqual(result.get('result'), {'deleted': True}, result)
+        for table, column in (('sessions', 'key'), ('overrides', 'key'), ('event_state', 'session_key'),
+                              ('session_events', 'session_key'), ('artifacts', 'session_key')):
+            self.assertIsNone(desktop.db.execute(f'SELECT 1 FROM {table} WHERE {column}=?', (key,)).fetchone())
+        self.assertEqual(other.read_bytes(), before)
+        self.assertIn('indexed only', moved.read_text())
+        self.scan()
+        self.assertEqual(desktop.bootstrap()['counts'], {'claude': 1})
+        self.assertEqual(self.session()['title'], 'keep this')
+
+    def test_delete_index_rechecks_restored_source_and_refuses_unavailable_path(self):
+        self.write(self.conversation())
+        self.scan()
+        session = self.session()
+        desktop = Gateway(self.root / 'index.sqlite3', allow_delete=True)
+        self.addCleanup(desktop.close)
+        moved = self.source.rename(self.source.with_suffix('.saved'))
+        self.assertTrue(desktop.get_session(session['id'])['source_missing'])
+        moved.rename(self.source)
+        restored = self.request_delete(session, desktop, method='delete_session_index')
+        self.assertIn('仍存在', restored['error']['message'])
+
+        moved = self.source.rename(self.source.with_suffix('.saved'))
+        self.source.mkdir()
+        self.assertFalse(desktop.get_session(session['id'])['source_missing'])
+        unavailable = self.request_delete(session, desktop, method='delete_session_index')
+        self.assertIn('无法确认', unavailable['error']['message'])
+        self.assertEqual(desktop.bootstrap()['total'], 1)
+        self.assertTrue(moved.is_file())
+
+    def test_delete_hermes_index_checks_exact_row_in_shared_database(self):
+        path = self.root / 'state.db'
+        self.roots['hermes'] = path
+        with sqlite3.connect(path) as source:
+            source.executescript('''
+                CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, started_at REAL, last_activity_at REAL, title TEXT);
+                CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT);
+                INSERT INTO sessions VALUES ('one', NULL, 1, 1, 'to delete'), ('one-more', NULL, 1, 1, 'keep');
+                INSERT INTO messages VALUES (1, 'one', 'user', 'cached');
+            ''')
+        self.addCleanup(source.close)
+        self.scan()
+        session = self.gateway.list_sessions(query='to delete')['items'][0]
+        desktop = Gateway(self.root / 'index.sqlite3', allow_delete=True)
+        self.addCleanup(desktop.close)
+        self.assertFalse(desktop.get_session(session['id'])['source_missing'])
+        with source:
+            source.execute("DELETE FROM sessions WHERE id='one'")
+        before = path.read_bytes()
+        detail = desktop.get_session(session['id'])
+        self.assertTrue(detail['source_missing'])
+        self.assertIsNone(detail['resumption']['command'])
+        result = self.request_delete(session, desktop, method='delete_session_index')
+        self.assertEqual(result.get('result'), {'deleted': True}, result)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(desktop.list_sessions(agent='hermes')['items'][0]['title'], 'keep')
 
     def test_session_resume_recipe_uses_native_id_and_configured_profile(self):
         native_id = '019a8836-b93f-7a51-9be7-791ed467b370'

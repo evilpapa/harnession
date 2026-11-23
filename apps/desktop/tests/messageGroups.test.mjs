@@ -50,3 +50,12 @@ test('appending pages merges a continuing run and retains its group identity', (
   assert.equal(combined[2].messages.length, 11);
   assert.deepEqual(flatten(combined), [...firstPage, ...secondPage]);
 });
+
+test('turn status stays visible between two collapsed technical groups', () => {
+  const status = event('interrupted', 'turn_status');
+  const messages = [...run(11, 'before'), status, ...run(11, 'after')];
+  const blocks = groupMessages(messages);
+  assert.deepEqual(blocks.map((block) => block.type), ['technical_group', 'message', 'technical_group']);
+  assert.equal(blocks[1].message, status);
+  assert.deepEqual(flatten(blocks), messages);
+});

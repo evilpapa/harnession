@@ -6,7 +6,7 @@ export type MessageBlock =
 
 const groupableKinds = new Set(['thinking', 'tool_call', 'tool_output', 'system']);
 
-/** Collapse long consecutive runs, preserving conversation and instruction boundaries. */
+/** Collapse long consecutive runs, keeping conversations, instructions and turn status visible. */
 export function groupMessages(messages: Message[]): MessageBlock[] {
   const blocks: MessageBlock[] = [];
   let pending: Message[] = [];

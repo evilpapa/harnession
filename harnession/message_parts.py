@@ -1,6 +1,7 @@
 """Read recorded content blocks without executing tools or decoding opaque payloads."""
 
 import json
+import re
 
 from .events import visible_event
 from .instruction_blocks import split_instructions
@@ -9,6 +10,33 @@ from .instruction_blocks import split_instructions
 TEXT_TYPES = {'text', 'input_text', 'output_text', 'summary_text', 'reasoning_text'}
 ROLES = {'user', 'assistant', 'system', 'developer', 'tool', 'toolResult'}
 UNREADABLE_THINKING = '来源仅保存了加密或脱敏的思考记录，未提供可读文本。'
+TURN_STATUSES = {
+    'turn_aborted': 'interrupted',
+    'turn_interrupted': 'interrupted',
+    'turn_cancelled': 'cancelled',
+    'turn_canceled': 'cancelled',
+    'turn_failed': 'failed',
+    'turn_error': 'failed',
+}
+TURN_STATUS_START = re.compile(r'<(' + '|'.join(TURN_STATUSES) + r')>')
+TURN_STATUS_MARKER = re.compile(TURN_STATUS_START.pattern + r'.*?</\1>', re.DOTALL)
+CLAUDE_INTERRUPTION = re.compile(r'\[Request interrupted by user(?: for tool use)?\]')
+
+
+def turn_status_marker(text, *, claude=False):
+    text = text.strip()
+    marker = TURN_STATUS_MARKER.match(text)
+    if marker and marker.end() == len(text):
+        return TURN_STATUSES[marker[1]]
+    if claude and CLAUDE_INTERRUPTION.fullmatch(text):
+        return 'interrupted'
+    return None
+
+
+def starts_with_turn_status(text, agent):
+    # Generated titles may truncate a wrapper before its closing tag.
+    return bool(TURN_STATUS_START.match(text.lstrip()) or
+                (agent == 'claude' and CLAUDE_INTERRUPTION.fullmatch(text.strip())))
 
 
 def plain_text(value):
@@ -64,6 +92,11 @@ def message_events(obj, message, role, source_seq, cwd, *, claude_local_commands
         kind = 'thinking'
 
     def add(event_kind, text, content=None, metadata=None, event_role=None, part=None):
+        if role in ('user', 'system', 'developer') and event_kind in ('message', 'system'):
+            status = turn_status_marker(text, claude=claude_local_commands)
+            if status:
+                event_kind, event_role = 'turn_status', 'system'
+                metadata = {'turn_status': status, 'turn_status_origin': 'marker'}
         if event_kind == 'message' and normalized_role == 'user' and text:
             parts = split_instructions(text, claude_local_commands=claude_local_commands)
             if any(item['category'] for item in parts):
@@ -130,6 +163,12 @@ def message_events(obj, message, role, source_seq, cwd, *, claude_local_commands
                               'is_error': bool(block.get('is_error') or block.get('isError'))},
                     event_role='tool', part='content:' + str(i))
             elif isinstance(block, str) or typ in TEXT_TYPES | {'image', 'input_image', 'image_url'}:
+                if role == 'user':
+                    text = plain_text(block)
+                    if turn_status_marker(text, claude=claude_local_commands):
+                        flush()
+                        add(kind, text, part='content:' + str(i))
+                        continue
                 if not pending:
                     pending_start = i
                 pending.append(block)
@@ -191,6 +230,31 @@ def codex_events(obj, source_seq, cwd, tool_names):
         text, kind, role = rendered_value(content), 'tool_output', 'tool'
     event = visible_event(record, role, text, content, source_seq, cwd)
     event.update(kind=kind, metadata=metadata)
+    return [event]
+
+
+def codex_turn_status(obj, source_seq, cwd):
+    payload = obj['payload']
+    marker = payload.get('type')
+    if marker not in TURN_STATUSES:
+        return []
+    status = TURN_STATUSES[marker]
+    reason = payload.get('reason')
+    if marker == 'turn_aborted' and reason in ('cancelled', 'canceled'):
+        status = 'cancelled'
+    event = visible_event(obj, 'system', rendered_value(payload), None, source_seq, cwd)
+    event.update(kind='turn_status', metadata={'turn_status': status, 'turn_status_origin': 'event'})
+    return [event]
+
+
+def pi_turn_status(obj, message, source_seq, cwd):
+    reason = message.get('stopReason')
+    if message.get('role') != 'assistant' or reason not in ('aborted', 'error'):
+        return []
+    text = plain_text(message.get('errorMessage')) or reason
+    event = visible_event(obj, 'system', text, None, source_seq, cwd)
+    event.update(kind='turn_status', metadata={'turn_status': 'interrupted' if reason == 'aborted' else 'failed'},
+                 identity_suffix='stop_reason', source_locator='line:' + str(source_seq) + '#stop_reason')
     return [event]
 
 

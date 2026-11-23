@@ -8,11 +8,12 @@ from pathlib import Path
 import sqlite3
 import sys
 
-from .core import connect, data_dir, defaults, file_fingerprint, refresh_stale_events, scan
+from .core import connect, data_dir, defaults, file_fingerprint, now, refresh_stale_events, scan
 from .events import IMAGE_TYPES, MAX_IMAGE_BYTES, parser_version
 from .locking import writer_lock
-from .deletion import deletion_recipe, direct_target, remove_session_file, resume_recipe
+from .deletion import deletion_recipe, direct_target, remove_session_file, resume_recipe, session_source_state
 from .codex_titles import refresh_codex_titles
+from .renaming import rename_native, rename_target, title_limit, validated_title
 
 PROTOCOL_VERSION = 1
 
@@ -72,10 +73,11 @@ class Gateway:
         handlers = {
             'bootstrap': self.bootstrap, 'list_sessions': self.list_sessions,
             'get_session': self.get_session, 'read_events': self.read_events,
-            'scan_sources': self.scan_sources, 'read_artifact': self.read_artifact,
+            'scan_sources': self.scan_sources, 'read_artifact': self.read_artifact, 'rename_session': self.rename_session,
         }
         if self.allow_delete:
             handlers['delete_session'] = self.delete_session
+            handlers['delete_session_index'] = self.delete_session_index
         if method not in handlers:
             raise ValueError('不支持的方法')
         return handlers[method](**params)
@@ -142,11 +144,10 @@ class Gateway:
     def get_session(self, session_id):
         row = self.session(session_id)
         result = self.summary(row)
-        source_value = row['source'] or ''
-        source_path = Path(source_value.rsplit('#', 1)[0] if row['agent'] == 'hermes' else source_value)
+        source_state = session_source_state(row['agent'], row['native_id'], row['source'])
         source = self.db.execute('SELECT status,detail,path FROM sources WHERE agent=?', (row['agent'],)).fetchone()
         result.update(source=row['source'], native_id=row['native_id'],
-                      source_available=source_path.is_file(),
+                      source_available=source_state == 'present', source_missing=source_state == 'missing',
                       source_status=source['status'] if source else 'unscanned',
                       source_detail=source['detail'] if source else '',
                       coverage=('已收集来源中可读取的对话、工具调用/输出、思考记录及系统提示；技术消息默认折叠。未保存或加密的内容无法还原。'
@@ -154,12 +155,51 @@ class Gateway:
                                 '旧索引快照；点击“扫描本地会话”补采工具输出、思考记录及系统提示。'),
                       branch_status='活动路径未知；按来源记录顺序展示所有可见分支' if row['agent'] == 'pi' else None)
         root = source['path'] if source else self.roots().get(row['agent'])
-        result['deletion'] = deletion_recipe(row['agent'], row['native_id'], row['source'], root)
+        result['rename_title_limit'] = title_limit(row['agent'])
+        if source_state == 'missing':
+            result['rename_unavailable_reason'] = '原始会话已找不到，无法同步标题。'
+        else:
+            try:
+                rename_target(row['agent'], row['native_id'], row['source'], root)
+            except (ValueError, OSError) as error:
+                result['rename_unavailable_reason'] = str(error)
+            else:
+                result['rename_unavailable_reason'] = None
+        command_source = row['source'] if source_state == 'present' else None
+        result['deletion'] = deletion_recipe(row['agent'], row['native_id'], command_source, root)
         result['deletion']['direct_reason'] = self.direct_delete_reason(row, root)
-        result['resumption'] = resume_recipe(row['agent'], row['native_id'], row['source'], root, row['cwd'])
+        result['resumption'] = resume_recipe(row['agent'], row['native_id'], command_source, root, row['cwd'])
+        if source_state != 'present':
+            reason = ('原始会话已找不到，仅保留 Harnession 索引。' if source_state == 'missing'
+                      else '原始来源暂不可用，无法生成会话命令。')
+            for recipe in (result['deletion'], result['resumption']):
+                recipe.update(target=row['source'], reason=reason)
         result['artifacts'] = [self.artifact_summary(item) for item in self.db.execute(
             'SELECT * FROM artifacts WHERE session_key=?', (row['key'],))]
         return result
+
+    def rename_session(self, session_id, indexed_at, title):
+        with writer_lock(self.db), self.db:
+            row = self.session(session_id)
+            if row['indexed_at'] != indexed_at:
+                raise ValueError('会话索引已更新，请重新打开会话再修改标题。')
+            agent, native_id = row['agent'], row['native_id']
+            title = validated_title(agent, title)
+            source = self.db.execute('SELECT path FROM sources WHERE agent=?', (agent,)).fetchone()
+            root = source['path'] if source else self.roots().get(agent)
+            path, command = rename_target(agent, native_id, row['source'], root)
+            revision = now()
+            # Stage the index edit; native failure rolls it back.
+            self.db.execute('UPDATE sessions SET title=?,indexed_at=? WHERE key=?', (title, revision, row['key']))
+            stats = rename_native(agent, native_id, path, command, title)
+            try:
+                if stats and row['fingerprint'] == file_fingerprint(stats[0], agent):
+                    self.db.execute('UPDATE sessions SET fingerprint=? WHERE key=?',
+                                    (file_fingerprint(stats[1], agent), row['key']))
+                self.db.commit()
+            except sqlite3.Error as error:
+                raise ValueError('Agent 已保存标题，但本地索引更新失败。请重新扫描会话。') from error
+        return dict(title=title, indexed_at=revision)
 
     def direct_delete_reason(self, row, root):
         if not self.allow_delete:
@@ -172,9 +212,7 @@ class Gateway:
 
     def delete_session(self, session_id, indexed_at):
         with writer_lock(self.db), self.db:
-            row = self.session(session_id)
-            if row['indexed_at'] != indexed_at:
-                raise ValueError('会话索引已更新，请重新打开会话确认删除。')
+            row = self.session_for_deletion(session_id, indexed_at)
             source = self.db.execute('SELECT path FROM sources WHERE agent=?', (row['agent'],)).fetchone()
             root = source['path'] if source else self.roots().get(row['agent'])
             path = direct_target(row['agent'], row['native_id'], row['source'], root)
@@ -185,16 +223,35 @@ class Gateway:
             if row['fingerprint'] != file_fingerprint(file_stat, row['agent']):
                 raise ValueError('原始会话文件已更新，请扫描后重新确认。')
             # Stage the cache writes first. Any failed file operation rolls them back.
-            for table in ('session_events', 'event_state', 'artifacts'):
-                self.db.execute(f'DELETE FROM {table} WHERE session_key=?', (row['key'],))
-            self.db.execute('DELETE FROM overrides WHERE key=?', (row['key'],))
-            self.db.execute('DELETE FROM sessions WHERE key=?', (row['key'],))
+            self.remove_session_index(row['key'])
             remove_session_file(path, file_stat)
             try:
                 self.db.commit()
             except sqlite3.Error as error:
                 raise ValueError('原始文件已删除，但清理本地索引失败。') from error
         return dict(deleted=True)
+
+    def delete_session_index(self, session_id, indexed_at):
+        with writer_lock(self.db), self.db:
+            row = self.session_for_deletion(session_id, indexed_at)
+            state = session_source_state(row['agent'], row['native_id'], row['source'])
+            if state != 'missing':
+                raise ValueError('原始会话仍存在，请重新查看会话命令详情。' if state == 'present'
+                                 else '暂时无法确认原始会话是否缺失，索引已保留。')
+            self.remove_session_index(row['key'])
+        return dict(deleted=True)
+
+    def session_for_deletion(self, session_id, indexed_at):
+        row = self.session(session_id)
+        if row['indexed_at'] != indexed_at:
+            raise ValueError('会话索引已更新，请重新打开会话确认删除。')
+        return row
+
+    def remove_session_index(self, key):
+        for table in ('session_events', 'event_state', 'artifacts'):
+            self.db.execute(f'DELETE FROM {table} WHERE session_key=?', (key,))
+        self.db.execute('DELETE FROM overrides WHERE key=?', (key,))
+        self.db.execute('DELETE FROM sessions WHERE key=?', (key,))
 
     @staticmethod
     def artifact_summary(row):

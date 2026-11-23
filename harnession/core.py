@@ -9,7 +9,9 @@ from collections import defaultdict
 from .events import install, parser_version, persist
 from .instruction_blocks import starts_with_claude_local_command
 from .locking import writer_lock
-from .message_parts import codex_events, instruction_events, message_events
+from .message_parts import (
+    codex_events, codex_turn_status, instruction_events, message_events, pi_turn_status, starts_with_turn_status,
+)
 
 
 def data_dir():
@@ -91,18 +93,32 @@ def parse_jsonl(path, agent):
         stream = open(path, encoding='utf8')
     native_id, cwd, created, updated, title = None, None, None, None, None
     session_name = None
-    messages, events = [], []
+    claude_names = {}
+    events = []
     tool_names, instructions = {}, {}
 
     def append_events(batch):
         nonlocal title
         for event in batch:
+            if agent == 'codex' and events and events[-1]['seq'] == event['seq'] - 1:
+                previous = events[-1]
+                before = previous['metadata'].get('turn_status_origin')
+                after = event['metadata'].get('turn_status_origin')
+                # Codex can write the same interruption twice on consecutive lines.
+                if {before, after} == {'marker', 'event'}:
+                    marker, structured = (previous, event) if before == 'marker' else (event, previous)
+                    marker_status = marker['metadata']['turn_status']
+                    structured_status = structured['metadata']['turn_status']
+                    if marker_status == structured_status or (
+                        marker_status == 'interrupted' and structured_status == 'cancelled'
+                        and marker['text'].lstrip().startswith('<turn_aborted>')
+                    ):
+                        marker['metadata']['turn_status'] = structured_status
+                        events[-1] = marker
+                        continue
             events.append(event)
-            if event['text']:
-                label = event['role'] if event['kind'] == 'message' else event['kind']
-                messages.append(label + ': ' + event['text'])
-                if event['kind'] == 'message' and event['role'] == 'user' and not title:
-                    title = event['text'].strip()
+            if event['kind'] == 'message' and event['role'] == 'user' and not title:
+                title = event['text'].strip()
     try:
         for seq, line in enumerate(stream, 1):
             if agent == 'pi' and not line.strip():
@@ -114,6 +130,11 @@ def parse_jsonl(path, agent):
             if not isinstance(obj, dict):
                 raise ValueError('JSONL 记录应为对象')
             typ = obj.get('type')
+            if agent == 'claude' and typ == 'custom-title':
+                session_id, name = obj.get('sessionId'), obj.get('customTitle')
+                if isinstance(session_id, str) and isinstance(name, str):
+                    claude_names[session_id] = name.strip()
+                continue
             stamp = obj.get('timestamp')
             if stamp:
                 created = created or str(stamp)
@@ -131,6 +152,8 @@ def parse_jsonl(path, agent):
                     append_events(instruction_events(obj, payload, seq, cwd, instructions))
                 if typ == 'response_item':
                     append_events(codex_events(obj, seq, cwd, tool_names))
+                elif typ == 'event_msg':
+                    append_events(codex_turn_status(obj, seq, cwd))
             elif agent == 'pi':
                 if native_id is None:
                     if typ != 'session' or not isinstance(obj.get('id'), str) or not obj['id'].strip():
@@ -154,6 +177,7 @@ def parse_jsonl(path, agent):
                     if not isinstance(msg, dict):
                         raise ValueError('Pi message 记录缺少有效的 message 对象')
                     append_events(message_events(obj, msg, msg.get('role'), seq, cwd))
+                    append_events(pi_turn_status(obj, msg, seq, cwd))
             else:
                 native_id = obj.get('sessionId') or native_id
                 cwd = obj.get('cwd') or cwd
@@ -175,6 +199,8 @@ def parse_jsonl(path, agent):
             code = proc.wait()
             if code:
                 raise ValueError('zstd 解压失败: ' + err.strip()[:200])
+    messages = [(event['role'] if event['kind'] == 'message' else event['kind']) + ': ' + event['text']
+                for event in events if event['text']]
     if not native_id and not messages:
         raise ValueError('没有识别到会话记录')
     for event in events:
@@ -186,8 +212,11 @@ def parse_jsonl(path, agent):
             metadata['tool_name'] = tool_names.get(call_id)
     if not title and agent == 'claude' and any(event['metadata'].get('instruction_category') == 'local_command' for event in events):
         title = '本地命令会话'
+    if agent == 'claude' and isinstance(native_id, str):
+        session_name = claude_names.get(native_id)
     return dict(native_id=native_id or path.stem, cwd=cwd, created=created, updated=updated,
-                title=(session_name or title or native_id or path.name).replace('\n', ' ')[:160], content='\n\n'.join(messages), events=events)
+                title=(session_name or title or native_id or path.name).replace('\n', ' ')[:160],
+                native_title=session_name, content='\n\n'.join(messages), events=events)
 
 
 def save(db, agent, source, item, fingerprint):
@@ -218,7 +247,9 @@ def _save(db, key, agent, source, item, fingerprint):
 
 def file_fingerprint(stat, agent):
     fingerprint = str(stat.st_mtime_ns) + ':' + str(stat.st_size)
-    return fingerprint + ':codex-titles-v1' if agent == 'codex' else fingerprint
+    if agent in ('codex', 'claude'):
+        return f'{fingerprint}:{agent}-titles-v1'
+    return fingerprint
 
 
 def scan_files(db, agent, root):
@@ -358,9 +389,12 @@ def refresh_stale_events(db):
             item = parse_jsonl(path, agent)
         except (OSError, ValueError, RuntimeError):
             continue
-        if not item['events'] or (row['native_id'] and row['native_id'] != str(item['native_id'])):
+        has_claude_title = agent == 'claude' and item['native_title'] is not None
+        if (not item['events'] and not has_claude_title) or (row['native_id'] and row['native_id'] != str(item['native_id'])):
             continue
-        if row['title'] and not (agent == 'claude' and starts_with_claude_local_command(row['title'])):
+        if not has_claude_title and row['title'] and not starts_with_turn_status(row['title'], agent) and not (
+            agent == 'claude' and starts_with_claude_local_command(row['title'])
+        ):
             item['title'] = row['title']
         save(db, agent, source, item, fingerprint)
     for path, session_ids in hermes.items():
