@@ -6,7 +6,8 @@ import shutil
 import sqlite3
 import subprocess
 from collections import defaultdict
-from .events import install, parser_version, persist
+from . import antigravity
+from .events import install, parser_version, persist, stable_id
 from .instruction_blocks import starts_with_claude_local_command
 from .locking import writer_lock
 from .message_parts import (
@@ -220,7 +221,7 @@ def parse_jsonl(path, agent):
 
 
 def save(db, agent, source, item, fingerprint):
-    key = agent + ':' + source
+    key = agent + ':' + (item['native_id'] if agent == 'antigravity' else source)
     db.execute('SAVEPOINT save_session')
     try:
         _save(db, key, agent, source, item, fingerprint)
@@ -241,7 +242,6 @@ def _save(db, key, agent, source, item, fingerprint):
     if 'events' in item:
         persist(db, key, item['events'], parser_version(agent))
     else:
-        from .events import stable_id
         db.execute('INSERT OR IGNORE INTO event_state VALUES (?,?,0)', (key, stable_id(key)))
 
 
@@ -360,6 +360,54 @@ def scan_hermes(db, path, session_ids=None):
     return count, 0, 0, []
 
 
+def scan_antigravity(db, profiles):
+    count = skipped = errors = 0
+    messages = []
+    copies = defaultdict(list)
+    metadata = {}
+
+    def report(path, error):
+        nonlocal errors
+        errors += 1
+        if len(messages) < 5:
+            messages.append(path.name + ': ' + str(error))
+
+    for profile in profiles:
+        try:
+            entries = list(antigravity.candidates(profile))
+            for native_id, summary in antigravity.summaries(profile).items():
+                if native_id not in metadata or (summary[2] or '') > (metadata[native_id][2] or ''):
+                    metadata[native_id] = summary
+            for native_id, path in entries:
+                copies[native_id].append(path)
+        except (OSError, ValueError, sqlite3.Error) as error:
+            report(profile, error)
+    for native_id, paths in copies.items():
+        summary = metadata.get(native_id, (None, None, None))
+        try:
+            inputs = [(path, antigravity.signature(path)) for path in paths if path.suffix != '.pb']
+            if not inputs:
+                raise ValueError('旧版 .pb 会话缺少可读取的转录文件')
+            inputs.sort(key=lambda entry: (entry[0].suffix == '.db', entry[1][0]), reverse=True)
+            existing = db.execute('''SELECT s.fingerprint,e.parser_version FROM sessions s
+                LEFT JOIN event_state e ON e.session_key=s.key WHERE s.key=?''',
+                                  ('antigravity:' + native_id,)).fetchone()
+            for path, before in inputs:
+                source = str(path.resolve())
+                fingerprint = stable_id(source, before, summary)
+                if existing and existing[0] == fingerprint and existing[1] == parser_version('antigravity'):
+                    skipped += 1
+                    break
+                item = antigravity.parse_conversation(path, native_id, summary, before)
+                if item:
+                    save(db, 'antigravity', source, item, fingerprint)
+                    count += 1
+                    break
+        except (OSError, ValueError, sqlite3.Error) as error:
+            report(Path(native_id), error)
+    return count, skipped, errors, messages
+
+
 def refresh_stale_events(db):
     """Reparse indexed sources only, preserving snapshots that cannot be upgraded."""
     stale = db.execute('''SELECT s.key,s.agent,s.source,s.native_id,s.title FROM sessions s
@@ -412,7 +460,9 @@ def scan(db, roots):
 
 def _scan(db, roots):
     results = []
-    for agent in ('codex', 'claude', 'hermes', 'pi', 'opencode'):
+    for agent in ('codex', 'claude', 'hermes', 'pi', 'antigravity', 'opencode'):
+        if agent not in roots:
+            continue
         path = roots[agent]
         if agent == 'opencode':
             status, detail = 'unsupported', '适配器尚未实现'
@@ -420,13 +470,23 @@ def _scan(db, roots):
             status, detail = 'missing', '未找到数据源'
         elif agent == 'hermes' and not path.is_file():
             status, detail = 'error', '数据源应为 SQLite 文件'
-        elif agent in ('codex', 'claude', 'pi') and not path.is_dir():
+        elif not path.is_dir() and agent != 'hermes':
             status, detail = 'error', '数据源应为目录'
         else:
             try:
-                count, skipped, errors, messages = scan_hermes(db, path) if agent == 'hermes' else scan_files(db, agent, path)
-                status = 'partial' if errors else 'ok'
-                detail = f'更新 {count}，未变化 {skipped}，失败 {errors}' + ('；' + '；'.join(messages) if messages else '')
+                profiles = antigravity.profiles(path) if agent == 'antigravity' else None
+                if profiles == []:
+                    status, detail = 'missing', '未找到 Antigravity 会话目录'
+                else:
+                    if agent == 'antigravity':
+                        counts = scan_antigravity(db, profiles)
+                    elif agent == 'hermes':
+                        counts = scan_hermes(db, path)
+                    else:
+                        counts = scan_files(db, agent, path)
+                    count, skipped, errors, messages = counts
+                    status = 'partial' if errors else 'ok'
+                    detail = f'更新 {count}，未变化 {skipped}，失败 {errors}' + ('；' + '；'.join(messages) if messages else '')
             except (OSError, sqlite3.Error, ValueError) as e:
                 status, detail = 'error', str(e)
         db.execute('INSERT OR REPLACE INTO sources VALUES (?,?,?,?,?)', (agent, str(path), status, detail, now()))
@@ -442,5 +502,7 @@ def defaults():
     hermes = Path(os.environ.get('HERMES_HOME', str(home / '.hermes')))
     pi = Path(os.environ.get('PI_CODING_AGENT_DIR') or str(home / '.pi' / 'agent')).expanduser()
     pi_sessions = Path(os.environ.get('PI_CODING_AGENT_SESSION_DIR') or str(pi / 'sessions')).expanduser()
+    antigravity_home = Path(os.environ.get('HARNESSION_ANTIGRAVITY_HOME') or str(home / '.gemini')).expanduser()
     return {'codex': codex / 'sessions', 'claude': claude / 'projects', 'hermes': hermes / 'state.db',
-            'pi': pi_sessions, 'opencode': Path(os.environ.get('XDG_DATA_HOME', str(home / '.local' / 'share'))) / 'opencode'}
+            'pi': pi_sessions, 'antigravity': antigravity_home,
+            'opencode': Path(os.environ.get('XDG_DATA_HOME', str(home / '.local' / 'share'))) / 'opencode'}

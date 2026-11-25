@@ -134,7 +134,7 @@ class InstructionSessionTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.roots = {agent: self.root / agent for agent in ('codex', 'claude', 'pi', 'opencode')}
+        self.roots = {agent: self.root / agent for agent in ('codex', 'claude', 'pi', 'antigravity', 'opencode')}
         self.roots['hermes'] = self.root / 'state.db'
         for agent in ('codex', 'claude', 'pi'):
             self.roots[agent].mkdir()
@@ -147,7 +147,8 @@ class InstructionSessionTests(unittest.TestCase):
         records = [dict(type=role, sessionId='native-session', uuid=str(i),
                         parentUuid=str(i - 1) if i else None, message=dict(content=text))
                    for i, (role, text) in enumerate(texts)]
-        self.path.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in records))
+        self.path.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in records),
+                             encoding='utf8')
         self.gateway.scan_sources({agent: str(path) for agent, path in self.roots.items()})
         return self.gateway.list_sessions()['items'][0]
 
@@ -282,7 +283,7 @@ class InstructionSessionTests(unittest.TestCase):
                 records.append(dict(type='response_item', payload=dict(type='message', **message)) if agent == 'codex'
                                else dict(type='message', id='u', message=message))
                 path = self.roots[agent] / 'session.jsonl'
-                path.write_text(''.join(json.dumps(row) + '\n' for row in records))
+                path.write_text(''.join(json.dumps(row) + '\n' for row in records), encoding='utf8')
                 events = parse_jsonl(path, agent)['events']
                 self.assertEqual([event['kind'] for event in events], ['instruction', 'message'])
         source = sqlite3.connect(self.roots['hermes'])

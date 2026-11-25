@@ -2,7 +2,7 @@
 
 ![Demo](./docs/demo.png)
 
-本地优先的 AI Agent 会话工作台：汇总本机 Codex、Claude Code、Pi 和 Hermes 会话，按项目归类并搜索。现有 Python CLI 之外，已提供 Tauri / Rust + React 桌面初版，支持 Chat、TUI 与图片附件浏览。详细范围见 [需求文档](docs/requirements.md) 和 [桌面开发说明](docs/desktop-development.md)。
+本地优先的 AI Agent 会话工作台：汇总本机 Codex、Claude Code、Pi、Hermes 和 Antigravity 会话，按项目归类并搜索。现有 Python CLI 之外，已提供 Tauri / Rust + React 桌面初版，支持 Chat、TUI 与图片附件浏览。详细范围见 [需求文档](docs/requirements.md) 和 [桌面开发说明](docs/desktop-development.md)。
 
 桌面界面方向见 [UI 实现规划](docs/ui-implementation-plan.md)；[早期视觉原型](docs/ui-prototype.html) 保留为设计参考。正式界面源码位于 `apps/desktop`，通过结构化 JSONL 服务读取索引，桌面宿主管理真实 PTY。
 
@@ -29,6 +29,7 @@ uv run harnession projects
 uv run harnession list --limit 20
 uv run harnession list --agent claude --search 关键词
 uv run harnession list --agent pi --search 关键词
+uv run harnession list --agent antigravity --search 关键词
 uv run harnession list --project 项目路径片段
 uv run harnession show 1
 uv run harnession assign 1 /path/to/project
@@ -40,6 +41,8 @@ uv run harnession assign 1 --reset
 默认扫描 `~/.codex/sessions`、`~/.claude/projects`、`~/.pi/agent/sessions` 和 `~/.hermes/state.db`，支持 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`PI_CODING_AGENT_DIR`、`HERMES_HOME`，也可用 `scan --codex 路径 --claude 路径 --pi 路径 --hermes 路径` 指定来源。Pi 还支持 `PI_CODING_AGENT_SESSION_DIR` 直接指定会话目录；优先级为 `--pi` > `PI_CODING_AGENT_SESSION_DIR` > `PI_CODING_AGENT_DIR/sessions` > 默认目录，支持 `~` 展开。Codex 的 `.jsonl.zst` 需要系统安装 `zstd` 并加入 PATH；其他格式不需要。未安装时会在扫描状态中报告失败。
 
 Pi 递归扫描会话目录中的 `.jsonl`，支持 v1–v3 格式，从会话头部提取原始 ID 和工作目录，优先使用最后设置的会话名称；名称清除后回退到首条用户文本。一个文件对应一条索引，文件内所有分支按记录顺序汇总，保留压缩前的原始消息；收集用户/助手文本、工具调用与输出、已记录的思考及系统提示，不重建当前分支或模型上下文。扩展状态和未知事件类型会忽略；不支持的版本和损坏记录会报告失败并保留旧索引。
+
+Antigravity 默认从 `~/.gemini` 查找桌面版 `antigravity` 和 CLI `antigravity-cli` 的数据。可通过 `scan --antigravity 路径`、`HARNESSION_ANTIGRAVITY_HOME` 或桌面数据源设置指定包含这两个目录的父目录，也可指定单个数据目录。优先从本地会话 SQLite 读取用户与助手文本，会话库不存在或没有对话文本时可读取现有的明文 JSONL 转录。摘要库提供原始标题与工作区，同一个会话 ID 合并为一条记录。旧版 `.pb` 会话需要已有的明文转录。Antigravity 支持历史搜索与阅读，工具、思考、附件以及原生改名、删除和恢复暂未接入。
 
 Codex、Claude Code、Pi 和 Hermes 的可识别技术记录以独立类型保存，在 Chat 和 TUI 记录视图中默认折叠，展开后可阅读和复制完整内容。`AGENTS.md instructions`、`Role` 及显式环境/技能指令块使用单独的“会话指令”标签，样式区别于工具、思考记录；同条消息里的普通提问单独保留。检索包含折叠内容，列表摘要展示最后一次真实用户提问，无提问时显示“暂无用户提问”。仅收集来源实际保存的内容；加密或脱敏思考只标注原文不可读，不解密或推断缺失文本。桌面版打开旧索引时自动从已索引的原始来源补采记录，保留会话 ID 和手动项目归属。点击“扫描”可发现新增会话或重试失败的来源，扫描不会修改原始来源。
 

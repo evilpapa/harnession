@@ -115,6 +115,6 @@ class RenameTests(unittest.TestCase):
         self.assertFalse((home / 'session_index.jsonl').exists())
         _rename_codex_archive(home, home, archive, 'archive', 'Renamed archive')
         self.assertEqual(load_codex_titles(archive.parent), {'archive': 'Renamed archive', 'other': 'another title'})
-        entry = json.loads((home / 'session_index.jsonl').read_text())
+        entry = json.loads((home / 'session_index.jsonl').read_text(encoding='utf8'))
         self.assertEqual((entry['id'], entry['thread_name']), ('archive', 'Renamed archive'))
         self.assertEqual(archive.read_bytes(), b'Archive bytes')

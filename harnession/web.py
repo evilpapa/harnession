@@ -11,6 +11,21 @@ from .gateway import Gateway, response
 
 def handler(gateway, allowed_origin):
     class Handler(BaseHTTPRequestHandler):
+        def drain_body(self):
+            # Windows 会在仍有未读请求体时关闭套接字产生 RST，先丢弃再回错。
+            try:
+                size = min(int(self.headers.get('Content-Length', '0')), 1 << 20)
+            except ValueError:
+                return
+            try:
+                while size > 0:
+                    chunk = self.rfile.read(min(size, 65536))
+                    if not chunk:
+                        break
+                    size -= len(chunk)
+            except OSError:
+                pass
+
         def do_POST(self):
             host = self.headers.get('Host', '')
             origin = self.headers.get('Origin')
@@ -20,11 +35,13 @@ def handler(gateway, allowed_origin):
                 # Vite proxy preserves the source Host header.
                 allowed_origin.removeprefix('http://')
             }:
+                self.drain_body()
                 self.send_error(403)
                 return
             try:
                 size = int(self.headers.get('Content-Length', '0'))
                 if not 0 < size <= 65536 or self.headers.get_content_type() != 'application/json':
+                    self.drain_body()
                     self.send_error(400)
                     return
                 request = json.loads(self.rfile.read(size))

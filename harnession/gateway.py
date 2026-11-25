@@ -154,6 +154,8 @@ class Gateway:
                                 if row['parser_version'] >= parser_version(row['agent']) else
                                 '旧索引快照；点击“扫描本地会话”补采工具输出、思考记录及系统提示。'),
                       branch_status='活动路径未知；按来源记录顺序展示所有可见分支' if row['agent'] == 'pi' else None)
+        if row['agent'] == 'antigravity':
+            result['coverage'] = '已收集本地会话中可读取的用户和助手文本。工作区来自会话摘要，工具、思考和附件未采集。'
         root = source['path'] if source else self.roots().get(row['agent'])
         result['rename_title_limit'] = title_limit(row['agent'])
         if source_state == 'missing':

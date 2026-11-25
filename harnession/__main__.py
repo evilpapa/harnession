@@ -5,17 +5,20 @@ from .core import connect, data_dir, defaults, scan
 from .locking import writer_lock
 
 
+CONFIGURABLE_SOURCES = ('codex', 'claude', 'hermes', 'pi', 'antigravity')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='harnession', description='本地 AI Agent 会话索引')
     parser.add_argument('--db', type=Path, default=data_dir() / 'index.sqlite3', help='索引数据库路径')
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('scan', help='扫描本机会话')
-    for agent in ('codex', 'claude', 'hermes', 'pi'):
+    for agent in CONFIGURABLE_SOURCES:
         p.add_argument('--' + agent, type=Path, help='覆盖数据源路径')
     sub.add_parser('status', help='查看数据源状态')
     sub.add_parser('projects', help='查看项目')
     p = sub.add_parser('list', help='列出会话')
-    p.add_argument('--agent', choices=('codex', 'claude', 'hermes', 'pi', 'opencode'))
+    p.add_argument('--agent', choices=(*CONFIGURABLE_SOURCES, 'opencode'))
     p.add_argument('--project', help='项目路径的子串')
     p.add_argument('--search', help='标题或会话内容的子串')
     p.add_argument('--limit', type=int, default=50)
@@ -30,7 +33,7 @@ def main(argv=None):
     try:
         if args.command == 'scan':
             roots = defaults()
-            for name in ('codex', 'claude', 'hermes', 'pi'):
+            for name in CONFIGURABLE_SOURCES:
                 if getattr(args, name): roots[name] = getattr(args, name).expanduser()
             results = scan(db, roots)
             for agent, status, detail in results: print(f'{agent}: {status} — {detail}')

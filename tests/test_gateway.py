@@ -22,7 +22,7 @@ class GatewayTests(unittest.TestCase):
         self.root = Path(self.tmp.name).resolve()
         self.gateway = Gateway(self.root / 'index.sqlite3')
         self.addCleanup(self.gateway.close)
-        self.roots = {agent: self.root / agent for agent in ('codex', 'claude', 'pi', 'hermes', 'opencode')}
+        self.roots = {agent: self.root / agent for agent in ('codex', 'claude', 'pi', 'hermes', 'antigravity', 'opencode')}
         self.roots['claude'].mkdir()
         self.cwd = self.root / '中文项目'
         self.cwd.mkdir()
@@ -213,7 +213,7 @@ class GatewayTests(unittest.TestCase):
         result = self.request_delete(session, desktop)
         self.assertIn('文件已更新', result['error']['message'])
         self.assertEqual(desktop.get_session(session['id']), detail)
-        self.assertIn('source changed', self.source.read_text())
+        self.assertIn('source changed', self.source.read_text(encoding='utf8'))
 
     def test_delete_index_for_missing_file_cleans_snapshot_without_touching_sources(self):
         self.write(self.conversation('indexed only', image=True))
@@ -245,7 +245,7 @@ class GatewayTests(unittest.TestCase):
                               ('session_events', 'session_key'), ('artifacts', 'session_key')):
             self.assertIsNone(desktop.db.execute(f'SELECT 1 FROM {table} WHERE {column}=?', (key,)).fetchone())
         self.assertEqual(other.read_bytes(), before)
-        self.assertIn('indexed only', moved.read_text())
+        self.assertIn('indexed only', moved.read_text(encoding='utf8'))
         self.scan()
         self.assertEqual(desktop.bootstrap()['counts'], {'claude': 1})
         self.assertEqual(self.session()['title'], 'keep this')

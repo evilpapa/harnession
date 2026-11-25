@@ -1,0 +1,14 @@
+.git
+.idea
+.omx
+.artifacts
+.venv
+.vscode
+__pycache__
+last-session-id
+dist
+build
+*.egg-info
+binaries
+target
+node_modules

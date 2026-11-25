@@ -292,7 +292,11 @@ def _append_title(path, agent, native_id, title):
                 raise ValueError('Claude Code 文件中找不到原始会话 ID。')
             record = dict(type='custom-title', customTitle=title, sessionId=native_id)
         current = path.lstat()
-        fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        # Windows 上 os.stat(路径) 与 os.fstat(句柄) 的创建时间可能相差约 1 毫秒，
+        # 因此仅在 Unix 上比对 ctime。
+        fields = ['st_dev', 'st_ino', 'st_size', 'st_mtime_ns']
+        if os.name != 'nt':
+            fields.append('st_ctime_ns')
         if any(getattr(original, field) != getattr(current, field) for field in fields):
             raise ValueError('原始会话文件正在变化，请重试。')
         size = _write_record(stream, record)

@@ -15,7 +15,7 @@ import { groupMessages } from './messageGroups';
 import { historyBatchSize, loadAllHistoryClick, readHistoryBatch } from './historyPagination';
 import type { Artifact, Bootstrap, ColorTheme, Message, Page, Session, SessionDetail, Source, ViewMode } from './types';
 
-const agentLabels: Record<string, string> = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', hermes: 'Hermes', opencode: 'OpenCode', shell: '系统终端' };
+const agentLabels: Record<string, string> = { codex: 'Codex', claude: 'Claude Code', pi: 'Pi', hermes: 'Hermes', antigravity: 'Antigravity', opencode: 'OpenCode', shell: '系统终端' };
 const TerminalPane = lazy(() => import('./TerminalPane').then((module) => ({ default: module.TerminalPane })));
 const Markdown = lazy(() => import('./Markdown'));
 const statusLabels: Record<string, string> = { ok: '已扫描', partial: '部分失败', error: '扫描失败', missing: '未找到来源', unsupported: '尚未支持', unscanned: '尚未扫描' };

@@ -10,3 +10,12 @@ build/
 .omx/
 .claude/last-session-id
 run.sh
+
+# Syncthing
+.stfolder/
+.stversions/
+*.sync-conflict-*
+
+# OS
+.DS_Store
+Thumbs.db

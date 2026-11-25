@@ -5,6 +5,7 @@ const logos: Record<string, string> = {
   claude: new URL('./assets/agents/claude.svg', import.meta.url).href,
   pi: new URL('./assets/agents/pi.svg', import.meta.url).href,
   hermes: new URL('./assets/agents/hermes.svg', import.meta.url).href,
+  antigravity: new URL('./assets/agents/antigravity.png', import.meta.url).href,
   opencode: new URL('./assets/agents/opencode.svg', import.meta.url).href,
 };
 

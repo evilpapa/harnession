@@ -2,7 +2,7 @@
 
 ## 目标
 
-本地优先地发现和索引多个 AI Agent 的历史会话，以项目为中心跨工具查找工作记录。长期目标支持 Codex、Claude Code、Pi、OpenCode、Hermes Agent，以及 Windows、Linux、macOS。覆盖范围受可访问数据、Agent 版本及格式影响，无法保证发现云端、删除或不可解析的数据。
+本地优先地发现和索引多个 AI Agent 的历史会话，以项目为中心跨工具查找工作记录。长期目标支持 Codex、Claude Code、Pi、OpenCode、Hermes Agent、Antigravity，以及 Windows、Linux、macOS。覆盖范围受可访问数据、Agent 版本及格式影响，无法保证发现云端、删除或不可解析的数据。
 
 ## 用户需求
 
@@ -38,6 +38,7 @@
 - Python 标准库实现 CLI，SQLite 作为本地索引，不访问网络。
 - 来源：Codex JSONL（可调用系统 zstd 处理压缩记录）、Claude Code JSONL、Pi JSONL（v1–v3）、Hermes SQLite（只读连接）。每个会话按 Agent + 来源路径去重；Hermes 使用数据库路径和原始 ID。
 - Pi 默认扫描 `~/.pi/agent/sessions`，支持 `PI_CODING_AGENT_DIR`、`PI_CODING_AGENT_SESSION_DIR` 和 `scan --pi` 覆盖。使用头部 ID/cwd、记录时间戳和最新会话名称；清除名称时回退首条用户文本。每个文件汇总所有分支的对话、工具调用与输出、已记录的思考和系统提示，保留压缩前原始消息，不重建当前分支或模型上下文。扩展状态与未知事件忽略，未知版本或损坏记录报告失败并保留旧索引。
+- Antigravity 只读扫描桌面版和 CLI 的本地 SQLite 会话及明文 JSONL 转录，按原始会话 ID 去重。首个本地工作区用于项目归类，范围覆盖普通用户和助手文本。没有明文转录的旧版 `.pb` 会话会报告失败。
 - 文件适配器按修改时间和大小增量判断；逐个读取失败时记录错误并保留旧记录。Hermes 当前全量读取。每次扫描结束保存数据源状态；已删除的来源不会自动删除索引。
 - 项目使用工作目录上溯 Git 根目录；常规 Git worktree 归入主仓库。无法找到 Git 根目录时使用工作目录。用户覆盖单独存储，不被扫描覆盖。
 - 对话、工具调用与输出、思考和系统/开发者提示用于检索；技术记录独立分类且默认折叠，`AGENTS.md instructions`、`Role` 和明确的环境/技能注入块使用独立指令标签。列表摘要使用最后一次用户提问，排除指令、工具结果和助手回复；同一原始提问中被指令分隔的普通文本合并展示。子串搜索支持中文，无需分词。数据模型保留源路径便于扩展和核查。

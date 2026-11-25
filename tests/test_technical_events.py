@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -328,7 +329,7 @@ class TechnicalEventsTests(unittest.TestCase):
         self.assertEqual(before, (source.read_bytes(), source.stat().st_mtime_ns))
 
         # An older index only knows the original session, even if the DB now contains more.
-        with sqlite3.connect(source) as db:
+        with closing(sqlite3.connect(source)) as db, db:
             db.execute('INSERT INTO sessions VALUES (?,?,?,?,?,?)', ('unindexed', None, 3, 4, None, None))
         self.gateway.db.execute('UPDATE event_state SET parser_version=0')
         self.gateway.db.execute('DELETE FROM session_events')

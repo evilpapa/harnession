@@ -27,7 +27,7 @@ class DeletionRecipeTests(unittest.TestCase):
         self.assertEqual(result['command'], result['native_command'])
         self.assertEqual(result['method'], 'native')
         self.assertEqual(shlex.split(result['file_command']), ['rm', '--', str(path)])
-        self.assertEqual(path.read_text(), 'synthetic session')
+        self.assertEqual(path.read_text(encoding='utf8'), 'synthetic session')
 
     def test_codex_nested_source_root_keeps_native_delete(self):
         path = self.file('codex/sessions/2026/11/rollout.jsonl')
@@ -46,14 +46,14 @@ class DeletionRecipeTests(unittest.TestCase):
                 self.assertEqual(result['method'], 'file')
                 self.assertIsNone(result['native_command'])
                 self.assertTrue(result['native_reason'])
-                self.assertEqual(path.read_text(), 'synthetic session')
+                self.assertEqual(path.read_text(encoding='utf8'), 'synthetic session')
 
     def test_hermes_deletes_one_id_without_deleting_shared_database(self):
         path = self.file('hermes profile/state.db')
         result = deletion_recipe('hermes', self.session_id, str(path) + '#' + self.session_id, path)
         self.assertEqual(shlex.split(result['command']), [
             'env', 'HERMES_HOME=' + str(path.parent), 'hermes', 'sessions', 'delete', '--', self.session_id])
-        self.assertEqual(path.read_text(), 'synthetic session')
+        self.assertEqual(path.read_text(encoding='utf8'), 'synthetic session')
         self.assertIsNone(result['file_command'])
         self.assertIsNone(deletion_recipe('hermes', 'other-id', str(path) + '#' + self.session_id, path)['command'])
         custom = self.file('hermes/custom.db')
@@ -63,7 +63,10 @@ class DeletionRecipeTests(unittest.TestCase):
         path = self.file('claude/session.jsonl')
         unsafe = self.file('claude/session[copy].jsonl')
         link = self.root / 'link.jsonl'
-        link.symlink_to(path)
+        try:
+            link.symlink_to(path)
+        except (OSError, NotImplementedError):
+            self.skipTest('当前环境不允许创建符号链接（Windows 需启用开发者模式或以管理员身份运行）')
         for agent, session_id, source, root in [
             ('opencode', 'id', str(path), path.parent),
             ('claude', '', str(path), path.parent),
@@ -88,7 +91,7 @@ class DeletionRecipeTests(unittest.TestCase):
         self.assertEqual(shlex.split(result['command']),
                          ['env', 'CODEX_HOME=' + str(self.root / 'codex home'),
                           'codex', '--cd', str(self.root), 'resume', '--', self.session_id])
-        self.assertEqual(path.read_text(), 'synthetic session')
+        self.assertEqual(path.read_text(encoding='utf8'), 'synthetic session')
 
     def test_resume_claude_preserves_config_and_shell_quotes_working_directory(self):
         path = self.file('claude home/projects/project/session.jsonl')
@@ -99,7 +102,7 @@ class DeletionRecipeTests(unittest.TestCase):
                          ['cd', '--', str(cwd), '&&', 'env',
                           'CLAUDE_CONFIG_DIR=' + str(self.root / 'claude home'),
                           'claude', '--resume', self.session_id])
-        self.assertEqual(path.read_text(), 'synthetic session')
+        self.assertEqual(path.read_text(encoding='utf8'), 'synthetic session')
 
     def test_resume_pi_uses_exact_source_and_hermes_uses_database_profile(self):
         path = self.file('pi/agent/sessions/project/session.jsonl')
