@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "desktop:dev": "npm run sidecar && tauri dev",
     "desktop:build": "npm run sidecar && tauri build",
-    "sidecar": "python3 ../../scripts/prepare-sidecar.py"
+    "sidecar": "uv run --locked python ../../scripts/prepare-sidecar.py"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

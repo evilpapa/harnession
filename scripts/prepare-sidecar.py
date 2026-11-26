@@ -8,7 +8,7 @@ host = next(line.split(': ', 1)[1] for line in subprocess.check_output(
 directory = root / 'apps' / 'desktop' / 'src-tauri' / 'binaries'
 directory.mkdir(parents=True, exist_ok=True)
 subprocess.run([
-    'uv', 'run', '--with', 'pyinstaller==6.22.3', 'python', '-m', 'PyInstaller',
+    'uv', 'run', '--locked', '--with', 'pyinstaller==6.22.3', 'python', '-m', 'PyInstaller',
     '--onefile', '--noconfirm', '--name', 'harnession-gateway-' + host,
     '--paths', str(root), '--distpath', str(directory),
     '--workpath', str(root / 'build' / 'sidecar'),

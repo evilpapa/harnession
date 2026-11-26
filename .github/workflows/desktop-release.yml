@@ -1,0 +1,152 @@
+name: Desktop build and release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            package: deb/*.deb
+          - platform: macos-arm64
+            runner: macos-15
+            package: dmg/*.dmg
+          - platform: macos-x64
+            runner: macos-15-intel
+            package: dmg/*.dmg
+          - platform: windows-x64
+            runner: windows-2022
+            package: nsis/*.exe
+    defaults:
+      run:
+        working-directory: apps/desktop
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Check tag against the desktop version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { version } = require('./src-tauri/tauri.conf.json');
+          const expectedTag = `v${version}`;
+          if (!/^v\d+\.\d+\.\d+$/.test(expectedTag) || process.env.GITHUB_REF_NAME !== expectedTag) {
+            console.error(`Expected release tag ${expectedTag}, got ${process.env.GITHUB_REF_NAME}`);
+            process.exit(1);
+          }
+          NODE
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            scripts/prepare-sidecar.py
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install stable Rust
+        run: rustup update stable --no-self-update
+
+      - run: npm ci
+
+      - name: Build desktop installer
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: npm run desktop:build -- -- --locked
+
+      - name: Check the release gateway
+        shell: bash
+        run: |
+          uv run --locked python - <<'PYTHON'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          name = "harnession-gateway.exe" if sys.platform == "win32" else "harnession-gateway"
+          gateway = Path("src-tauri/target/release", name).resolve()
+          request = {"id": 1, "protocol_version": 1, "method": "bootstrap"}
+          with TemporaryDirectory() as directory:
+              result = subprocess.run(
+                  [str(gateway), "--db", str(Path(directory) / "index.sqlite3")],
+                  input=json.dumps(request) + "\n", encoding="utf-8",
+                  capture_output=True, check=True, timeout=60,
+              )
+              response = json.loads(result.stdout)
+              if response.get("id") != request["id"] or "result" not in response:
+                  raise SystemExit(f"Gateway bootstrap failed: {response}")
+          PYTHON
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: harnession-${{ matrix.platform }}
+          path: apps/desktop/src-tauri/target/release/bundle/${{ matrix.package }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    concurrency:
+      group: desktop-release-${{ github.ref }}
+
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: harnession-*
+          path: packages
+
+      - name: Publish installers and release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          assets=(
+            packages/harnession-linux-x64/*.deb
+            packages/harnession-macos-arm64/*.dmg
+            packages/harnession-macos-x64/*.dmg
+            packages/harnession-windows-x64/*.exe
+          )
+          if [[ ${#assets[@]} -ne 4 ]]; then
+            echo "::error::Expected exactly one installer per build"
+            exit 1
+          fi
+          for asset in "${assets[@]}"; do
+            if [[ ! -f "$asset" ]]; then
+              echo "::error::Missing desktop installer: $asset"
+              exit 1
+            fi
+          done
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" --verify-tag --generate-notes

@@ -74,6 +74,19 @@ apps/desktop/src-tauri/target/release/bundle/deb/
 
 `cargo test`、开发运行与正式 release 的资源加载方式不同，正式包需要单独启动验证。Intel Mac 和 Windows 桌面包尚未实机验证。
 
+## GitHub Actions 发布
+
+在 GitHub 的 Actions 页面手动运行 **Desktop build and release**，可在运行详情的 Artifacts 中下载 Linux x64 `.deb`、Apple Silicon `.dmg`、Intel Mac `.dmg` 和 Windows x64 NSIS `.exe`。Linux 包在 Ubuntu 22.04 上构建。macOS 包使用 ad-hoc 签名，未公证。Windows 安装程序未做 Authenticode 签名。
+
+正式发布时，将 `apps/desktop/src-tauri/tauri.conf.json` 中的版本随代码提交，再推送对应的 `v主版本.次版本.补丁版本` 标签。以当前 `0.1.0` 为例：
+
+```sh
+git tag -a v0.1.0 -m "Harnession 0.1.0"
+git push origin v0.1.0
+```
+
+四个平台的安装包构建和索引服务检查全部通过后，工作流会创建 GitHub Release，附上安装包和自动生成的发布说明。手动运行仅生成 Actions 构建产物。
+
 ## Codex 会话名称
 
 Codex 会话名称读取本地元数据：优先使用版本化 `state_*.sqlite` 中 `threads.name` 的显式名称，其次使用 `session_index.jsonl` 中该 ID 最新的 `thread_name`，再使用 `threads.title`；没有名称元数据时保留来源标题或首条用户消息。SQLite 以只读模式打开，支持旧版缺少 `name` 列的表结构。打开已有索引时会刷新名称，后续扫描也会更新仅改名但对话文件没有变化的会话，消息 ID 与手动项目归属保持不变。

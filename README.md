@@ -8,6 +8,10 @@
 
 ## 桌面版
 
+从 [GitHub Releases](https://github.com/evilpapa/harnession/releases) 下载 Linux x64 的 `.deb`、Apple Silicon 或 Intel Mac 的 `.dmg`，以及 Windows x64 的 `.exe` 安装程序。安装包自带 Python 索引服务。
+
+从源码启动开发版：
+
 ```sh
 uv sync --locked
 cd apps/desktop
