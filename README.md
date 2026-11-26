@@ -17,6 +17,8 @@ npm run desktop:dev
 
 首次运行需要 Rust、Node、uv 和平台对应的 Tauri 系统依赖。点击扫描升级已有索引的消息结构，保留旧会话内容与手动归属。使用 `npm run desktop:build` 正式打包。macOS 生成可从 Finder 打开的 `Harnession.app` 和 `.dmg` 安装镜像，包内自带 Python 索引服务。构建路径和平台验证记录见 [开发说明](docs/desktop-development.md)。
 
+Windows 构建后，在仓库根目录运行 `./run.ps1` 即可启动免安装版。主程序和索引服务分别为 `apps/desktop/src-tauri/target/release/` 下的 `harnession-desktop.exe` 和 `harnession-gateway.exe`；复制到其他目录时请把两者放在一起。运行仍需 WebView2，启动脚本会为本次启动定位已安装的运行时。
+
 ## 开始使用
 
 使用 `uv` 管理开发环境，仓库默认使用 Python 3.12。应用支持 Python 3.9 或更新版本，无运行时第三方依赖。安装 `uv` 后，在仓库目录执行：

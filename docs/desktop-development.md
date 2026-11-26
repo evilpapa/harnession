@@ -4,7 +4,7 @@
 
 ## 启动桌面版
 
-开发环境需要 Python 3.9+、uv、Node（使用项目锁文件）和 Rust。macOS 构建可使用 Xcode Command Line Tools（`xcode-select --install`）。Linux 构建需要 GTK3 / WebKitGTK 4.1。
+开发环境需要 Python 3.9+、uv、Node（使用项目锁文件）和 Rust。macOS 构建可使用 Xcode Command Line Tools（`xcode-select --install`）。Linux 构建需要 GTK3 / WebKitGTK 4.1。Windows x64 构建需要 Rust `x86_64-pc-windows-msvc`、Visual Studio Build Tools（MSVC x64/x86 和 Windows SDK）及 WebView2 Runtime。
 
 仓库根目录：
 
@@ -53,6 +53,8 @@ uv run --locked python -m harnession.web --db .artifacts/demo/index.sqlite3
 cd apps/desktop
 npm run desktop:build
 ```
+
+Windows 输出 NSIS 安装程序到 `apps/desktop/src-tauri/target/release/bundle/nsis/`。
 
 macOS 输出位于 `apps/desktop/src-tauri/target/release/bundle/` 下的 `macos/Harnession.app` 和 `dmg/Harnession_0.1.0_aarch64.dmg`（Apple Silicon）。可以直接打开 `.app`，或挂载 `.dmg` 后把 Harnession 拖入「应用程序」。安装包内的索引服务位于 `Harnession.app/Contents/MacOS/harnession-gateway`。macOS 最低版本配置为 13.0。
 

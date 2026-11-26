@@ -349,6 +349,9 @@ def main():
     parser.add_argument('--db', type=Path, default=data_dir() / 'index.sqlite3')
     parser.add_argument('--allow-delete', action='store_true')
     args = parser.parse_args()
+    # The desktop host sends and receives UTF-8 even on non-UTF-8 Windows locales.
+    sys.stdin.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding='utf-8')
     gateway = Gateway(args.db, allow_delete=args.allow_delete)
     try:
         for line in sys.stdin:

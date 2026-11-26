@@ -39,6 +39,13 @@ impl Gateway {
         }
         #[cfg(target_os = "macos")]
         command.env("PATH", crate::macos::desktop_path());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // The GUI host needs pipes to the console sidecar, not a console window.
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
         command.arg("--allow-delete");
         if let Some(path) = database {
             command.arg("--db").arg(path);
